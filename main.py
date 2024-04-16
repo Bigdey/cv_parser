@@ -1,67 +1,86 @@
 import pdfplumber
 import os
+import re
 from pathlib import Path
 
 
-def list_pdf_files(directory):
+def load_pdf_files(directory):
     """
-    Lists all PDF files in a specified directory.
+    Load all PDF files in a specified directory.
     """
-    return [os.path.join(directory, f) for f in os.listdir(directory) if f.lower().endswith('.pdf')]
+    if not os.path.exists(directory):
+        raise ValueError(f"The specified path {directory} does not exist.")
+    if not os.path.isdir(directory):
+        raise ValueError(f"The specified path {directory} is not a directory.")
+
+    pdf_files = []
+    for entry in os.listdir(directory):
+        full_path = os.path.join(directory, entry)
+        if os.path.isfile(full_path) and full_path.endswith('.pdf'):
+            pdf_files.append(full_path)
+    return pdf_files
 
 
-def search_in_cv(pdf_path, search_terms):
+def find_terms_in_text(text, terms):
     """
-    Searches for specified terms in a CV and returns the terms matched in each category.
+    Finds terms in the provided text and returns a list of matched terms.
     """
-    matches = {category: [] for category in search_terms}
+    matched_terms = []
+    text = text.lower()
+    for term in terms:
+        if term.lower() in text:
+            matched_terms.append(term)
+    return matched_terms
+
+
+def search_in_cv(pdf_path, skills, languages, location):
+    """
+    Searches skills, languages, and locations within a CV.
+    Only includes results if skills are found.
+    """
+    results = {'Skills': [], 'Languages': [], 'City': []}
     with pdfplumber.open(pdf_path) as pdf:
-        text = ' '.join(page.extract_text() or '' for page in pdf.pages).lower()
-        for category, terms in search_terms.items():
-            matches[category] = [term for term in terms if term.lower() in text]
-    return matches
+        text = ' '.join(page.extract_text() or '' for page in pdf.pages)
+
+        results['Skills'] = find_terms_in_text(text, skills)
+        results['Languages'] = find_terms_in_text(text, languages)
+        results['City'] = find_terms_in_text(text, location)
+
+    # Only return results if skills were found
+    if not results['Skills'] or not results['Languages'] or not results['City']:
+        return None, 0  # No skills found, so return None and score of 0
+
+    # Calculate score based on the number of matches in each category
+    score = len(results['Skills']) + len(results['Languages']) + len(results['City'])
+    return results, score
 
 
-def search_keywords_in_cvs(directory, search_terms):
+def search_keywords_in_cvs(directory, skills, languages, location):
     """
     Searches for specific terms related to Skills, Languages, and City in all CVs within a directory.
-    Returns CVs with the terms that were matched.
+    Sort results based on scores, excluding candidates without any skills found.
     """
-    pdf_paths = list_pdf_files(directory)
+    pdf_paths = load_pdf_files(directory)
     results = {}
     for pdf_path in pdf_paths:
-        matches = search_in_cv(pdf_path, search_terms)
-        # Check if there are any matches in any category
-        if any(matches.values()):
-            results[os.path.basename(pdf_path)] = matches
-    return results
+        cv_matches, cv_score = search_in_cv(pdf_path, skills, languages, location)
+        if cv_matches:  # Check if there are any skills found
+            results[os.path.basename(pdf_path)] = (cv_matches, cv_score)
+
+    # Sort results by score in descending order
+    sorted_results = sorted(results.items(), key=lambda item: item[1][1], reverse=True)
+    return sorted_results
 
 
 if __name__ == '__main__':
-    # Define your search terms for each category
-    search_for_skills = ['Python', 'Git', 'Selenium']
-    search_for_languages = ['English', 'German']
-    search_for_location = ['Cluj']
+    search_for_skills = ['python']
+    search_for_languages = ['English']
+    search_for_location = ['Cluj-Nonpoca']
 
-    # Combine into a dictionary
-    search_terms = {
-        'Skills': search_for_skills,
-        'Languages': search_for_languages,
-        'City': search_for_location
-    }
-
-    # Example directory to scan
     directory_path = Path('cvs')
+    sorted_results = search_keywords_in_cvs(directory_path, search_for_skills, search_for_languages, search_for_location)
 
-    # Execute the search
-    results = search_keywords_in_cvs(directory_path, search_terms)
-
-    # Print results with detailed matches
-    for filename, details in results.items():
-        print(f"{filename}:")
+    for filename, (details, score) in sorted_results:
+        print(f"\n{filename} - Total Score: {score}")
         for category, matches in details.items():
-            if matches:
-                print(f"  {category}: {', '.join(matches)}")
-            else:
-                print(f"  {category}: No matches found")
-        print()  # Extra newline for better separation
+            print(f"  {category}: {', '.join(matches) if matches else 'No value'}")
